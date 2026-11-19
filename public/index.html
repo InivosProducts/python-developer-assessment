@@ -78,6 +78,10 @@ ul.plain{margin:6px 0 0;padding-left:18px}
         <button type="button" id="changeBtn">Change email</button>
       </div>
     </form>
+    <div class="note hidden" id="suggest">
+      <div id="suggestTxt"></div>
+      <div class="row" style="margin-top:8px"><button type="button" class="primary" id="useSuggest"></button><button type="button" id="keepMine">No, use what I typed</button></div>
+    </div>
     <div class="err" id="startErr"></div>
   </div>
 </section>
@@ -121,7 +125,7 @@ function show(id){["start","test","done"].forEach(s=>$(s).classList.toggle("hidd
 async function post(url,data){
   const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
   const j=await r.json().catch(()=>({}));
-  if(!r.ok) throw new Error(j.error||"Something went wrong ("+r.status+").");
+  if(!r.ok) throw Object.assign(new Error(j.error||"Something went wrong ("+r.status+")."),{data:j});
   return j;
 }
 
@@ -140,9 +144,11 @@ function begin(j){
   window.addEventListener("beforeunload",guard);
 }
 
+let skipTypo=false,typed="";
 async function sendCode(){
-  const j=await post("/api/verify-email",{name,email});
-  challenge=j.challenge;$("sentTo").textContent=email;
+  $("suggest").classList.add("hidden");
+  const j=await post("/api/verify-email",{name,email,skipTypoCheck:skipTypo});
+  challenge=j.challenge;email=j.email||email;$("sentTo").textContent=email;
   $("startForm").classList.add("hidden");$("codeForm").classList.remove("hidden");$("code").value="";$("code").focus();
 }
 
@@ -152,10 +158,25 @@ $("startForm").addEventListener("submit",async e=>{
   if(name.length<2){$("startErr").textContent="Please enter your full name.";return}
   if(verifyOn&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){$("startErr").textContent="Please enter a valid email address.";return}
   $("startBtn").disabled=true;$("startErr").textContent="";
+  if(email.toLowerCase()!==typed){skipTypo=false;typed=email.toLowerCase()}
+  $("suggest").classList.add("hidden");
   try{ if(verifyOn) await sendCode(); else begin(await post("/api/start",{name})); }
-  catch(err){$("startErr").textContent=err.message}
+  catch(err){showSendError(err)}
   $("startBtn").disabled=false;
 });
+
+// The server rejects addresses that can't receive mail, and may suggest a correction for typos.
+function showSendError(err){
+  const d=err.data||{};
+  if(!d.suggestion){$("startErr").textContent=err.message;return}
+  $("startErr").textContent="";
+  $("suggestTxt").textContent=d.reason==="typo"?`Did you mean ${d.suggestion}?`:err.message;
+  $("useSuggest").textContent="Use "+d.suggestion;$("useSuggest").dataset.v=d.suggestion;
+  $("keepMine").classList.toggle("hidden",d.reason!=="typo");
+  $("suggest").classList.remove("hidden");
+}
+$("useSuggest").onclick=()=>{$("email").value=$("useSuggest").dataset.v;$("suggest").classList.add("hidden");$("startForm").requestSubmit()};
+$("keepMine").onclick=()=>{skipTypo=true;$("suggest").classList.add("hidden");$("startForm").requestSubmit()};
 
 $("codeForm").addEventListener("submit",async e=>{
   e.preventDefault();

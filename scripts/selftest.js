@@ -3,8 +3,32 @@ process.env.TOKEN_SECRET = process.env.TOKEN_SECRET || "local-test-secret-123456
 process.env.MAILGUN_API_KEY = "x"; process.env.MAILGUN_DOMAIN = "example.mailgun.org"; process.env.RESULTS_TO = "test@example.com";
 const assert = require("assert");
 const { buildPaper, publicPaper, MODULES } = require("../lib/paper");
-let sent = null;
-global.fetch = async (url, opts) => { sent = { url, body: Object.fromEntries(new URLSearchParams(opts.body)) }; return { ok: true, text: async () => "ok" }; };
+let sent = null, mgValidate = null;
+global.fetch = async (url, opts = {}) => {
+  if (url.includes("/address/validate")) {
+    const addr = new URL(url).searchParams.get("address");
+    if (mgValidate === "down") return { ok: false, status: 402, text: async () => "payment required" };
+    return { ok: true, json: async () => ({ address: addr, result: addr.startsWith("nobody@") ? "undeliverable" : "deliverable", did_you_mean: addr.startsWith("nobody@") ? "somebody@example.com" : undefined }) };
+  }
+  sent = { url, body: Object.fromEntries(new URLSearchParams(opts.body)) }; return { ok: true, text: async () => "ok" };
+};
+
+// Fake DNS so the test runs offline.
+const emailCheck = require("../lib/email-check");
+const err = (code) => Promise.reject(Object.assign(new Error(code), { code }));
+const DNS = {
+  "example.com": { mx: [{ exchange: "mx.example.com", priority: 10 }] },
+  "gmail.com": { mx: [{ exchange: "gmail-smtp-in.l.google.com", priority: 5 }] },
+  "a-only.org": { mx: "ENODATA", a: ["1.2.3.4"] },
+  "nomail.org": { mx: [{ exchange: ".", priority: 0 }] },
+  "empty.org": { mx: "ENODATA", a: "ENODATA", aaaa: "ENODATA" },
+  "flaky.org": { mx: "ESERVFAIL" },
+  "gmial.com": { mx: [{ exchange: "mx.gmial.com", priority: 10 }] },
+};
+const look = (d, k) => { const v = DNS[d] ? DNS[d][k] : "ENOTFOUND"; return Array.isArray(v) ? Promise.resolve(v) : err(v || "ENODATA"); };
+emailCheck.resolver.resolveMx = (d) => look(d, "mx");
+emailCheck.resolver.resolve4 = (d) => look(d, "a");
+emailCheck.resolver.resolve6 = (d) => look(d, "aaaa");
 
 for (let s = 100000; s < 101000; s++) {
   const p = buildPaper(s);
@@ -56,6 +80,31 @@ const res = () => { const r = { code: 0, body: null, headers: {} }; r.status = c
   assert.strictEqual(r4.code, 200);
   delete process.env.EMAIL_VERIFICATION;
 
-  console.log("OK  1000 papers valid, no answers leaked, email verification enforced, tamper rejected");
+  // Email existence checks run before any code is sent.
+  const ask = async (email, extra = {}) => { sent = null; const r = res(); await verifyEmail({ method: "POST", body: { name: "Test Candidate", email, ...extra } }, r); return r; };
+  let r;
+  r = await ask("someone@gmial.com"); assert.strictEqual(r.code, 400); assert.strictEqual(r.body.reason, "typo"); assert.strictEqual(r.body.suggestion, "someone@gmail.com"); assert.strictEqual(sent, null, "no email for a typo");
+  r = await ask("someone@gmial.com", { skipTypoCheck: true }); assert.strictEqual(r.code, 200, "candidate can keep a flagged domain if it accepts mail");
+  r = await ask("someone@company.con"); assert.strictEqual(r.body.suggestion, "someone@company.com");
+  r = await ask("someone@ymail.com"); assert.notStrictEqual(r.body.reason, "typo", "real providers are not typos");
+  r = await ask("someone@no-such-domain-xyz.com"); assert.strictEqual(r.code, 400); assert.strictEqual(r.body.reason, "domain"); assert.strictEqual(sent, null);
+  r = await ask("someone@nomail.org"); assert.strictEqual(r.code, 400); assert.strictEqual(r.body.reason, "domain");
+  r = await ask("someone@empty.org"); assert.strictEqual(r.code, 400); assert.strictEqual(r.body.reason, "domain");
+  r = await ask("someone@a-only.org"); assert.strictEqual(r.code, 200, "A-record fallback accepted");
+  r = await ask("someone@flaky.org"); assert.strictEqual(r.code, 200, "DNS errors fail open");
+  r = await ask("nobody@example.com"); assert.strictEqual(r.code, 200, "mailbox check is off by default");
+  const realMx = emailCheck.resolver.resolveMx; emailCheck.resolver.resolveMx = () => err("ENOTFOUND");
+  r = await ask("someone@example.com"); assert.strictEqual(r.code, 200, "broken server DNS fails open");
+  emailCheck.resolver.resolveMx = realMx;
+  process.env.MAILGUN_VALIDATION = "on";
+  r = await ask("nobody@example.com"); assert.strictEqual(r.code, 400); assert.strictEqual(r.body.reason, "mailbox"); assert.strictEqual(r.body.suggestion, "somebody@example.com"); assert.strictEqual(sent, null);
+  r = await ask("cand@example.com"); assert.strictEqual(r.code, 200);
+  mgValidate = "down"; r = await ask("nobody@example.com"); assert.strictEqual(r.code, 200, "Mailgun validation outage fails open"); mgValidate = null;
+  delete process.env.MAILGUN_VALIDATION;
+  process.env.EMAIL_DOMAIN_CHECK = "off";
+  r = await ask("someone@no-such-domain-xyz.com"); assert.strictEqual(r.code, 200, "domain check can be turned off");
+  delete process.env.EMAIL_DOMAIN_CHECK;
+
+  console.log("OK  1000 papers valid, no answers leaked, email verification enforced, email existence checks, tamper rejected");
   console.log("Email subject:", sent.body.subject);
 })().catch(e => { console.error(e); process.exit(1); });
