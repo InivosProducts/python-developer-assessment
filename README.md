@@ -6,13 +6,18 @@ A rotating 20-question test (14 multiple-choice + 6 free-text) that candidates t
 - Every candidate gets a different paper: 2–3 questions per module, with question and option order shuffled.
 - **Grading happens on the server.** The browser never receives correct answers, explanations or marking keys.
 - **Time is measured on the server.** The start time sits inside an HMAC-signed token, so the candidate can't change it. Sessions expire after 3 hours.
+- **Email is verified before the test starts.** The candidate enters their name and email, receives a 6-digit code, and enters it to begin. The verified email appears in the result email (and as its Reply-To).
 - No database is needed. It runs on Vercel's free (Hobby) plan with no npm dependencies.
 
 ```
-api/start.js     POST: creates a paper and returns a signed token plus questions (without answers)
+api/config.js    GET: tells the page whether email verification is on
+api/verify-email.js  POST: emails a 6-digit code and returns a signed challenge token
+api/start.js     POST: checks the code, creates a paper and returns a signed token plus questions (without answers)
 api/submit.js    POST: verifies the token, grades, emails the result via Mailgun
 lib/bank.js      question bank with answers (server only)
 lib/paper.js     paper builder, token signing, grading
+lib/verify-email.js  stateless code generation and checking
+lib/mail.js      Mailgun sender
 public/index.html  candidate UI
 scripts/selftest.js  local test: `npm test`
 ```
@@ -53,18 +58,23 @@ vercel --prod
 | `TOKEN_SECRET` | 32+ random characters | Required. Generate one with `openssl rand -hex 32`. |
 | `RESULTS_TIMEZONE` | `Asia/Colombo` | Time zone for the start and finish times in the email. |
 | `SHOW_SCORE_TO_CANDIDATE` | `true` / `false` | Whether the candidate sees their score after submitting. |
+| `EMAIL_VERIFICATION` | `on` / `off` | Defaults to `on`. Candidates must confirm their email with a code before starting. Set `off` to go back to name-only. |
+
+> **Email verification and the Mailgun sandbox:** a sandbox domain only delivers to *authorized recipients*, so candidates won't receive their codes. For real use, send from your own verified domain (see step 1). For a quick sandbox trial, add the test candidate's address as an authorized recipient, or set `EMAIL_VERIFICATION=off`.
 
 Redeploy after you change any variable.
 
 ## 3. Test it
 
-- Open the deployed URL, enter a test name and submit. The email should arrive within a minute (check spam the first time).
+- Open the deployed URL, enter a test name and your email, enter the code you receive, then submit. The email should arrive within a minute (check spam the first time).
 - If the email fails, the candidate is told to contact you, and the full result text is printed in **Vercel → Project → Logs** (search for `EMAIL FAILED`), so nothing is lost.
-- Locally: `npm test` checks 1,000 generated papers, makes sure no answers reach the browser, and confirms tampered tokens are rejected (Mailgun is stubbed).
+- Locally: `npm test` checks 1,000 generated papers, makes sure no answers reach the browser, confirms the email code is enforced, and confirms tampered tokens are rejected (Mailgun is stubbed).
 
 ## Notes and limits
 
 - Free-text scores are keyword-based estimates (0–2 in 0.5 steps). The email shows each answer, the key points found and the model answer, so a marker can adjust the score.
+- How verification works without a database: the code is never stored. `/api/verify-email` returns a challenge token signed with `TOKEN_SECRET` that holds the name, email, a 15-minute expiry and an HMAC of the code. `/api/start` recomputes the HMAC from the code the candidate types. The test token then carries the verified email, so it can't be swapped later.
+- Because nothing is stored, the server can't count wrong guesses or rate-limit code requests per address. The 15-minute expiry and 1-in-a-million code keep guessing impractical; if you see abuse, add Vercel's Firewall rate limiting on `/api/verify-email` and `/api/start`.
 - With no database there's no single-use enforcement. A candidate could restart and get a new paper, but each attempt is emailed with its own timestamps, so restarts are visible.
 - To edit questions, change `lib/bank.js`. Each module needs at least 3 multiple-choice and 1 free-text question.
 # python-developer-assessment
