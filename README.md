@@ -2,7 +2,7 @@
 
 A rotating 20-question test (14 multiple-choice + 6 free-text) that candidates take in a browser. When they submit, the server grades the test and emails the **candidate name, score, time taken and the full answers** to your hiring inbox through Mailgun.
 
-- Questions come from 8 modules of skill-maps.com/domains/python-developer (Databases & ORMs and Web Frameworks & APIs have been removed). The bank has 77 questions: 61 multiple-choice and 16 free-text.
+- Questions come from 8 modules of skill-maps.com/domains/python-developer (Databases & ORMs and Web Frameworks & APIs have been removed). The bank has 87 questions: 71 multiple-choice and 16 free-text, including 10 GitHub Actions interview questions in Testing & CI/CD.
 - Every candidate gets a different paper: 2–3 questions per module, with question and option order shuffled.
 - **Grading happens on the server.** The browser never receives correct answers, explanations or marking keys.
 - **Time is measured on the server.** The start time sits inside an HMAC-signed token, so the candidate can't change it. Sessions expire after 3 hours.
