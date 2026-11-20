@@ -51,7 +51,8 @@ ${result.details.map((d) => `<div style="border:1px solid #e5e5e5;border-radius:
 <div style="color:#666;font-size:12px">Q${d.n} · ${esc(d.module)} · ${d.type === "mcq" ? "Multiple choice" : "Free text"} · <b style="color:${d.points === d.max ? "#1f7a4d" : d.points > 0 ? "#9a6700" : "#b3261e"}">${d.points}/${d.max}</b></div>
 <div style="margin:4px 0">${esc(stripTags(d.question))}</div>
 ${d.type === "mcq"
-  ? `<div>Chosen: ${esc(d.chosen ?? "(no answer)")}<br>Correct: ${esc(d.correct)}</div>`
+  ? `<div style="white-space:pre-wrap">Chosen: ${esc(d.chosen ?? "(no answer)")}
+Correct: ${esc(d.correct)}</div>`
   : `<div style="background:#f7f7f5;padding:8px;border-radius:6px;white-space:pre-wrap">${esc(d.answer || "(no answer)")}</div>
 <div style="font-size:12px;margin-top:4px">Key points: ${d.keyPoints.map((k) => (k.hit ? "✓ " : "✗ ") + esc(k.label)).join(", ")}</div>
 <div style="font-size:12px;color:#555;margin-top:4px"><i>Model answer:</i> ${esc(d.model)}</div>`}
