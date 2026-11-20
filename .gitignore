@@ -3,3 +3,5 @@ node_modules
 .env.local
 .vercel
 env.production
+.patch
+question-bank-review.pdf
