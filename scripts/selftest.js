@@ -3,14 +3,18 @@ process.env.TOKEN_SECRET = process.env.TOKEN_SECRET || "local-test-secret-123456
 process.env.MAILGUN_API_KEY = "x"; process.env.MAILGUN_DOMAIN = "example.mailgun.org"; process.env.RESULTS_TO = "test@example.com";
 const assert = require("assert");
 const { buildPaper, publicPaper, MODULES } = require("../lib/paper");
-let sent = null, mgValidate = null;
+let sent = null, mgValidate = null, mgSend = [], sendCalls = 0;
 global.fetch = async (url, opts = {}) => {
   if (url.includes("/address/validate")) {
     const addr = new URL(url).searchParams.get("address");
     if (mgValidate === "down") return { ok: false, status: 402, text: async () => "payment required" };
     return { ok: true, json: async () => ({ address: addr, result: addr.startsWith("nobody@") ? "undeliverable" : "deliverable", did_you_mean: addr.startsWith("nobody@") ? "somebody@example.com" : undefined }) };
   }
-  sent = { url, body: Object.fromEntries(new URLSearchParams(opts.body)) }; return { ok: true, text: async () => "ok" };
+  sendCalls++;
+  const fail = mgSend.shift(); // queue of failures to simulate: a status code or "network"
+  if (fail === "network") throw new Error("fetch failed");
+  if (fail) return { ok: false, status: fail, text: async () => "simulated failure" };
+  sent = { url, body: Object.fromEntries(new URLSearchParams(opts.body)) }; return { ok: true, text: async () => JSON.stringify({ id: "<test-id@mailgun>", message: "Queued" }) };
 };
 
 // Fake DNS so the test runs offline.
@@ -105,6 +109,45 @@ const res = () => { const r = { code: 0, body: null, headers: {} }; r.status = c
   r = await ask("someone@no-such-domain-xyz.com"); assert.strictEqual(r.code, 200, "domain check can be turned off");
   delete process.env.EMAIL_DOMAIN_CHECK;
 
-  console.log("OK  1000 papers valid, no answers leaked, email verification enforced, email existence checks, tamper rejected");
+  // Result recovery without a database: every submission returns an encrypted result file.
+  const receipt = require("../lib/receipt"), admin = require("../api/admin");
+  const submitFresh = async (failures = []) => {
+    const v2 = res(); await verifyEmail({ method: "POST", body: { name: "Recovery Test", email: "rec@example.com" } }, v2);
+    const c2 = sent.body.subject.match(/(\d{6})$/)[1];
+    const s2 = res(); await start({ method: "POST", body: { challenge: v2.body.challenge, code: c2 } }, s2);
+    mgSend = failures; sendCalls = 0;
+    const r = res(); await submit({ method: "POST", body: { token: s2.body.token, answers } }, r); return r;
+  };
+  let sr = await submitFresh();
+  assert.ok(sr.body.emailed && /^PDA1\./.test(sr.body.receipt));
+  assert.ok(!/Recovery Test|rec@example|"correct"/.test(Buffer.from(sr.body.receipt.slice(5), "base64url").toString("latin1")), "result file must be encrypted");
+  const opened = receipt.open("Some header text\n\n" + sr.body.receipt + "\n");
+  assert.strictEqual(opened.name, "Recovery Test"); assert.strictEqual(opened.email, "rec@example.com"); assert.strictEqual(opened.result.details.length, 20);
+  const bad1 = sr.body.receipt.slice(0, 40) + (sr.body.receipt[40] === "A" ? "B" : "A") + sr.body.receipt.slice(41);
+  assert.strictEqual(receipt.open(bad1), null, "edited result file rejected");
+  // Mailgun hiccups are retried; configuration errors are not.
+  sr = await submitFresh([503, "network"]);
+  assert.ok(sr.body.emailed, "retried after transient failures"); assert.strictEqual(sendCalls, 3);
+  sr = await submitFresh([401]);
+  assert.strictEqual(sr.body.emailed, false); assert.strictEqual(sendCalls, 1, "no retry on 401"); assert.ok(/^PDA1\./.test(sr.body.receipt));
+  mgSend = [];
+  // Admin viewer.
+  const adm = async (body) => { const r = res(); await admin({ method: "POST", body }, r); return r; };
+  assert.strictEqual((await adm({ password: "x", receipt: sr.body.receipt })).code, 503, "off without ADMIN_PASSWORD");
+  process.env.ADMIN_PASSWORD = "correct-horse-battery";
+  assert.strictEqual((await adm({ password: "wrong-password", receipt: sr.body.receipt })).code, 401);
+  assert.strictEqual((await adm({ password: "correct-horse-battery", receipt: bad1 })).code, 400);
+  const view = await adm({ password: "correct-horse-battery", receipt: "pasted from logs RESULT FILE: " + sr.body.receipt, action: "view" });
+  assert.strictEqual(view.code, 200); assert.strictEqual(view.body.name, "Recovery Test"); assert.ok(view.body.html.includes("Recovery Test"));
+  sent = null; const rs = await adm({ password: "correct-horse-battery", receipt: sr.body.receipt, action: "resend" });
+  assert.strictEqual(rs.code, 200); assert.ok(sent.body.subject.startsWith("[Resent] ")); assert.strictEqual(sent.body.to, "test@example.com");
+  mgSend = [401]; const rf = await adm({ password: "correct-horse-battery", receipt: sr.body.receipt, action: "resend" });
+  assert.strictEqual(rf.code, 502); mgSend = [];
+  process.env.TOKEN_SECRET = "a-different-secret-0987654321";
+  assert.strictEqual(receipt.open(sr.body.receipt), null, "other deployments can't open it");
+  process.env.TOKEN_SECRET = "local-test-secret-1234567890";
+  delete process.env.ADMIN_PASSWORD;
+
+  console.log("OK  1000 papers valid, no answers leaked, email verification enforced, email existence checks, tamper rejected, result recovery");
   console.log("Email subject:", sent.body.subject);
 })().catch(e => { console.error(e); process.exit(1); });

@@ -14,13 +14,17 @@ A rotating 20-question test (14 multiple-choice + 6 free-text) that candidates t
 api/config.js    GET: tells the page whether email verification is on
 api/verify-email.js  POST: emails a 6-digit code and returns a signed challenge token
 api/start.js     POST: checks the code, creates a paper and returns a signed token plus questions (without answers)
-api/submit.js    POST: verifies the token, grades, emails the result via Mailgun
+api/submit.js    POST: verifies the token, grades, emails the result via Mailgun, returns an encrypted result file
+api/admin.js     POST: opens a result file for the hiring team (used by admin.html)
 lib/bank.js      question bank with answers (server only)
 lib/paper.js     paper builder, token signing, grading
 lib/verify-email.js  stateless code generation and checking
 lib/email-check.js   typo, domain (DNS) and optional Mailgun mailbox checks
-lib/mail.js      Mailgun sender
+lib/mail.js      Mailgun sender (with retries)
+lib/receipt.js   encrypts and opens result files
+lib/report.js    builds the result report (email and admin view)
 public/index.html  candidate UI
+public/admin.html  result viewer for the hiring team
 scripts/selftest.js  local test: `npm test`
 ```
 
@@ -60,6 +64,7 @@ vercel --prod
 | `TOKEN_SECRET` | 32+ random characters | Required. Generate one with `openssl rand -hex 32`. |
 | `RESULTS_TIMEZONE` | `Asia/Colombo` | Time zone for the start and finish times in the email. |
 | `SHOW_SCORE_TO_CANDIDATE` | `true` / `false` | Whether the candidate sees their score after submitting. |
+| `ADMIN_PASSWORD` | 16+ random characters | Turns on the result viewer at `/admin.html`. Leave unset to keep it off. Generate one with `openssl rand -base64 18`. |
 | `EMAIL_VERIFICATION` | `on` / `off` | Defaults to `on`. Candidates must confirm their email with a code before starting. Set `off` to go back to name-only. |
 
 | `EMAIL_DOMAIN_CHECK` | `on` / `off` | Defaults to `on`. Rejects addresses whose domain doesn't exist or can't receive email. |
@@ -73,6 +78,23 @@ Redeploy after you change any variable.
 
 - Open the deployed URL, enter a test name and your email, enter the code you receive, then submit. The email should arrive within a minute (check spam the first time).
 - If the email fails, the candidate is told to contact you, and the full result text is printed in **Vercel → Project → Logs** (search for `EMAIL FAILED`), so nothing is lost.
+
+## 4. When a result email doesn't arrive
+
+No database is used, so results are recovered from one of these, in order:
+
+1. **Vercel logs** (Project → Logs). Search for the candidate's name. Every submission writes `SUBMIT RECEIVED`, then `RESULT EMAILED … mailgun_id=…` or `EMAIL FAILED … error=…`.
+   - `RESULT EMAILED`: Mailgun accepted it. Search Mailgun → **Logs** for that id to see whether it was delivered, bounced or is waiting.
+   - `EMAIL FAILED`: the error says why (e.g. `401` wrong key or region, `403`/`400` sandbox recipient not authorised). The full result and a `RESULT FILE: PDA1.…` line follow it.
+   - No `SUBMIT RECEIVED` at all: the submission never reached the server (the candidate closed the page, or lost their connection).
+   - Vercel keeps these logs only for a short time on the Hobby plan (about an hour), so check soon or use option 2.
+2. **The candidate's result file.** After submitting, every candidate can download an encrypted result file, and is asked to send it to you if the email fails. Open it at `https://<your-site>/admin.html` with `ADMIN_PASSWORD` to see the full report, download it, or email it to `RESULTS_TO` again. You can also paste a `RESULT FILE: PDA1.…` line from the logs there.
+
+The result file is encrypted with a key derived from `TOKEN_SECRET` (AES-256-GCM), so candidates can't read the answers or change their score, and only a deployment with the same `TOKEN_SECRET` can open it. If you change `TOKEN_SECRET`, older result files can no longer be opened.
+
+Failed Mailgun requests are retried automatically (up to 3 attempts) when the cause is temporary: network errors, timeouts, rate limits or Mailgun server errors. Configuration errors are not retried.
+
+The admin page has one password and no account lockout. Use a long random password, and consider adding `/api/admin` to your Vercel Firewall rate-limit rule, e.g. `^/api/(verify-email|start|admin)$`.
 - Locally: `npm test` checks 1,000 generated papers, makes sure no answers reach the browser, confirms the email code is enforced, and confirms tampered tokens are rejected (Mailgun is stubbed).
 
 ## Notes and limits
