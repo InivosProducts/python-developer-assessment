@@ -106,7 +106,12 @@ ul.plain{margin:6px 0 0;padding-left:18px}
     <p class="sub" style="margin-bottom:12px">Your test has been submitted.</p>
     <div id="dScore"></div>
     <p>Time taken: <b id="dTime"></b></p>
-    <div class="note hidden" id="dMailWarn">Your result was recorded, but the email notification could not be sent. Please let the hiring team know.</div>
+    <div class="note hidden" id="dMailWarn"><b>Your result couldn't be emailed to the hiring team.</b> Please download your result file below and send it to the hiring team, or to whoever invited you to this test.</div>
+  </div>
+  <div class="card hidden" id="dReceipt">
+    <h2>Your result file</h2>
+    <p style="margin:0 0 12px">Please keep a copy. If the hiring team tells you they didn't receive your result, send them this file. It's encrypted, so only the hiring team can open it.</p>
+    <button class="primary" id="dDownload" type="button">Download result file</button>
   </div>
 </section>
 
@@ -233,8 +238,19 @@ $("confYes").onclick=async()=>{
     $("dName").textContent=name;$("dTime").textContent=j.duration;
     $("dScore").innerHTML=j.total!==undefined?`<div class="score">${j.percent}%</div><p class="sub">${j.total} / ${j.max} points (free-text answers will be reviewed by a marker)</p>`:"";
     $("dMailWarn").classList.toggle("hidden",!!j.emailed);
+    receipt=j.receipt||"";$("dReceipt").classList.toggle("hidden",!receipt);
     show("done");window.scrollTo(0,0);
   }catch(err){$("submitErr").textContent=err.message+" Your answers are still on this page; please try again.";$("submitBtn").disabled=false}
+};
+let receipt="";
+$("dDownload").onclick=()=>{
+  const day=new Date().toISOString().slice(0,10);
+  const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||"candidate";
+  const text=`Python Developer Assessment: result file\nCandidate: ${name}\nSubmitted: ${new Date().toString()}\n\nThis file is encrypted. The hiring team can open it on the assessment's admin page.\n\n${receipt}\n`;
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([text],{type:"text/plain"}));
+  a.download=`assessment-result-${slug}-${day}.txt`;
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 };
 </script>
 </body>
