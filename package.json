@@ -4,5 +4,10 @@
   "private": true,
   "description": "Rotating 20-question Python Developer test. Grades on the server and emails results via Mailgun.",
   "engines": { "node": ">=18" },
-  "scripts": { "test": "node scripts/selftest.js" }
+  "scripts": {
+    "test": "node scripts/selftest.js",
+    "bank:decrypt": "node scripts/bank.js decrypt",
+    "bank:encrypt": "node scripts/bank.js encrypt",
+    "bank:check": "node scripts/bank.js check"
+  }
 }
