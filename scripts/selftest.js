@@ -1,7 +1,19 @@
 // Local check: builds many papers, verifies the mix, and runs a full start -> submit cycle with Mailgun stubbed.
-process.env.TOKEN_SECRET = process.env.TOKEN_SECRET || "local-test-secret-1234567890";
+// The question bank is encrypted with TOKEN_SECRET, so the test needs the deployment's real secret.
+if (!process.env.TOKEN_SECRET) { console.error("Set TOKEN_SECRET (the deployment's value) to run the tests: TOKEN_SECRET=... npm test"); process.exit(1); }
 process.env.MAILGUN_API_KEY = "x"; process.env.MAILGUN_DOMAIN = "example.mailgun.org"; process.env.RESULTS_TO = "test@example.com";
 const assert = require("assert");
+
+// Encrypted bank: round trip, wrong secret and tampering are rejected.
+{
+  const bc = require("../lib/bank-crypto");
+  const enc = bc.encrypt("module.exports = { x: /a+/ };", "bank-test-secret-1234567890");
+  assert.ok(bc.load(bc.decrypt(enc, "bank-test-secret-1234567890")).x.test("aa"));
+  assert.throws(() => bc.decrypt(enc, "another-secret-1234567890"), /wrong TOKEN_SECRET/);
+  const raw = Buffer.from(enc.trim().slice(bc.PREFIX.length), "base64"); raw[raw.length - 1] ^= 1;
+  assert.throws(() => bc.decrypt(bc.PREFIX + raw.toString("base64"), "bank-test-secret-1234567890"), /modified/);
+  assert.throws(() => bc.decrypt(enc, "short"), /TOKEN_SECRET/);
+}
 const { buildPaper, publicPaper, MODULES } = require("../lib/paper");
 let sent = null, mgValidate = null, mgSend = [], sendCalls = 0;
 global.fetch = async (url, opts = {}) => {
