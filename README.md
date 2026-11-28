@@ -16,7 +16,10 @@ api/verify-email.js  POST: emails a 6-digit code and returns a signed challenge 
 api/start.js     POST: checks the code, creates a paper and returns a signed token plus questions (without answers)
 api/submit.js    POST: verifies the token, grades, emails the result via Mailgun, returns an encrypted result file
 api/admin.js     POST: opens a result file for the hiring team (used by admin.html)
-lib/bank.js      question bank with answers (server only)
+lib/bank.js      loads the question bank from lib/bank.enc (encrypted with TOKEN_SECRET)
+lib/bank-crypto.js  encrypts and decrypts the question bank file
+lib/bank.enc     the question bank with answers, encrypted (server only)
+scripts/bank.js  `npm run bank:decrypt` / `npm run bank:encrypt` for editing questions
 lib/paper.js     paper builder, token signing, grading
 lib/verify-email.js  stateless code generation and checking
 lib/email-check.js   typo, domain (DNS) and optional Mailgun mailbox checks
@@ -95,7 +98,7 @@ The result file is encrypted with a key derived from `TOKEN_SECRET` (AES-256-GCM
 Failed Mailgun requests are retried automatically (up to 3 attempts) when the cause is temporary: network errors, timeouts, rate limits or Mailgun server errors. Configuration errors are not retried.
 
 The admin page has one password and no account lockout. Use a long random password, and consider adding `/api/admin` to your Vercel Firewall rate-limit rule, e.g. `^/api/(verify-email|start|admin)$`.
-- Locally: `npm test` checks 1,000 generated papers, makes sure no answers reach the browser, confirms the email code is enforced, and confirms tampered tokens are rejected (Mailgun is stubbed).
+- Locally: `TOKEN_SECRET=… npm test` checks 1,000 generated papers, makes sure no answers reach the browser, confirms the email code is enforced, and confirms tampered tokens are rejected (Mailgun is stubbed).
 
 ## Notes and limits
 
@@ -105,5 +108,24 @@ The admin page has one password and no account lockout. Use a long random passwo
 - To see the checks working, open **Vercel → Project → Logs** and search for `EMAIL CHECK`. Each code request writes one line, for example `EMAIL CHECK result=rejected reason=domain address=j***@nosuch.com typo=none dns=no-domain mailgun=off`. The address is masked; `dns` is `ok`, `no-domain`, `no-mail` or `unknown` (lookup failed, candidate let through); `mailgun` is `off`, the Mailgun result (`deliverable`, `undeliverable`, …) or `unavailable`.
 - Because nothing is stored, the server can't count wrong guesses or rate-limit code requests per address. The 15-minute expiry and 1-in-a-million code keep guessing impractical; if you see abuse, add Vercel's Firewall rate limiting on `/api/verify-email` and `/api/start`.
 - With no database there's no single-use enforcement. A candidate could restart and get a new paper, but each attempt is emailed with its own timestamps, so restarts are visible.
-- To edit questions, change `lib/bank.js`. Each module needs at least 3 multiple-choice and 1 free-text question.
+- To edit questions, see **Editing the question bank** below. Each module needs at least 3 multiple-choice and 1 free-text question.
+
+## Editing the question bank
+
+The question bank (questions, correct answers, marking keys and model answers) is stored encrypted in `lib/bank.enc`, using AES-256-GCM with a key derived from `TOKEN_SECRET`. Anyone can see the file in the repository, but without `TOKEN_SECRET` they can't read it, and any change made to it without the secret makes the app refuse to load it.
+
+To change questions you need the same `TOKEN_SECRET` the deployed app uses, in your environment or as `TOKEN_SECRET=…` in a local `.env` file:
+
+```bash
+npm run bank:decrypt   # lib/bank.enc -> lib/bank.source.js (git-ignored)
+# edit lib/bank.source.js
+npm run bank:encrypt   # lib/bank.source.js -> lib/bank.enc, deletes the source
+TOKEN_SECRET=… npm test
+git add lib/bank.enc && git commit
+```
+
+- `lib/bank.source.js` is git-ignored, so the plain bank isn't committed by accident.
+- **If you change `TOKEN_SECRET`, re-encrypt the bank first:** decrypt with the old secret, then encrypt with the new one, and deploy both together. Otherwise the app can't load its questions (and older result files stop opening too).
+- `npm test` needs the real `TOKEN_SECRET` because it loads the encrypted bank.
+- Commits made before the bank was encrypted still contain the plain `lib/bank.js` in the git history. If the repository is public, those questions should be treated as exposed.
 # python-developer-assessment

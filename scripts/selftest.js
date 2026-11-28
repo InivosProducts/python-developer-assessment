@@ -1,5 +1,11 @@
 // Local check: builds many papers, verifies the mix, and runs a full start -> submit cycle with Mailgun stubbed.
+// The question bank (lib/bank.enc) is encrypted with TOKEN_SECRET, so tests need the app's real secret.
+if (!process.env.TOKEN_SECRET && require("fs").existsSync(require("path").join(__dirname, "../lib/bank.enc"))) {
+  console.error("Set TOKEN_SECRET to the app's secret to run the tests: the question bank is encrypted with it.");
+  process.exit(1);
+}
 process.env.TOKEN_SECRET = process.env.TOKEN_SECRET || "local-test-secret-1234567890";
+const APP_SECRET = process.env.TOKEN_SECRET;
 process.env.MAILGUN_API_KEY = "x"; process.env.MAILGUN_DOMAIN = "example.mailgun.org"; process.env.RESULTS_TO = "test@example.com";
 const assert = require("assert");
 const { buildPaper, publicPaper, MODULES } = require("../lib/paper");
@@ -145,9 +151,21 @@ const res = () => { const r = { code: 0, body: null, headers: {} }; r.status = c
   assert.strictEqual(rf.code, 502); mgSend = [];
   process.env.TOKEN_SECRET = "a-different-secret-0987654321";
   assert.strictEqual(receipt.open(sr.body.receipt), null, "other deployments can't open it");
-  process.env.TOKEN_SECRET = "local-test-secret-1234567890";
+  process.env.TOKEN_SECRET = APP_SECRET;
   delete process.env.ADMIN_PASSWORD;
 
-  console.log("OK  1000 papers valid, no answers leaked, email verification enforced, email existence checks, tamper rejected, result recovery");
+  // Encrypted question bank: round trip, wrong secret and tampering are rejected.
+  const bc = require("../lib/bank-crypto");
+  const srcText = "module.exports = { MODULES: [\"M\"], BANK: [{ m: 0, keys: [[/x+/]] }] };";
+  const enc = bc.encryptSource(srcText, "bank-test-secret-123456");
+  assert.strictEqual(bc.decryptSource(enc, "bank-test-secret-123456"), srcText);
+  assert.ok(bc.compile(srcText).BANK[0].keys[0][0] instanceof RegExp, "RegExp keys survive");
+  assert.ok(!enc.includes("MODULES"), "bank is not readable");
+  assert.throws(() => bc.decryptSource(enc, "another-secret-0000000"), /wrong TOKEN_SECRET|modified/);
+  const body = enc.split("PDB1.")[1].trim(), i = body.length - 5;
+  const tampered = "PDB1." + body.slice(0, i) + (body[i] === "A" ? "B" : "A") + body.slice(i + 1);
+  assert.throws(() => bc.decryptSource(tampered, "bank-test-secret-123456"), /modified/);
+
+  console.log("OK  1000 papers valid, no answers leaked, email verification enforced, email existence checks, tamper rejected, result recovery, encrypted bank");
   console.log("Email subject:", sent.body.subject);
 })().catch(e => { console.error(e); process.exit(1); });
